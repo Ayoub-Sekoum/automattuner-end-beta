@@ -1,0 +1,233 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "appName": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 18,
+            "metadata": {
+                "description": "The name of the App Service (and prefix for resources)."
+            }
+        },
+        "dockerImage": {
+            "type": "string",
+            "defaultValue": "ghcr.io/ayoub-sekoum/automattuner:latest",
+            "metadata": {
+                "description": "The Docker image to deploy (e.g., ghcr.io/user/repo:latest)."
+            }
+        },
+        "sku": {
+            "type": "string",
+            "defaultValue": "B1",
+            "allowedValues": [
+                "B1",
+                "B2",
+                "S1",
+                "P1v3"
+            ],
+            "metadata": {
+                "description": "Intune CD Farm SKU (B1 is recommended for basic usage)."
+            }
+        },
+        "clientId": {
+            "type": "string",
+            "metadata": {
+                "description": "Intune CD Client ID (Application ID from Entra ID)."
+            }
+        },
+        "clientSecret": {
+            "type": "securestring",
+            "metadata": {
+                "description": "Intune CD Client Secret."
+            }
+        },
+        "tenantId": {
+            "type": "string",
+            "metadata": {
+                "description": "Intune CD Tenant ID."
+            }
+        },
+        "dbAdminLogin": {
+            "type": "string",
+            "metadata": {
+                "description": "Intune CD DB Admin Login Username."
+            }
+        },
+        "dbAdminPassword": {
+            "type": "securestring",
+            "metadata": {
+                "description": "Intune CD DB Admin Login Password."
+            }
+        },
+        "dbLocation": {
+            "type": "string",
+            "defaultValue": "North Europe",
+            "metadata": {
+                "description": "Intune CD DB Location (Azure Region)."
+            }
+        },
+        "dbSku": {
+            "type": "string",
+            "defaultValue": "Basic",
+            "allowedValues": [
+                "Basic",
+                "S0",
+                "S1"
+            ],
+            "metadata": {
+                "description": "Intune CD DB Edition (Basic is usually sufficient)."
+            }
+        },
+        "timezone": {
+            "type": "string",
+            "defaultValue": "UTC",
+            "metadata": {
+                "description": "Timezone for the application (e.g., UTC, W. Europe Standard Time)."
+            }
+        }
+    },
+    "variables": {
+        "appServicePlanName": "[concat('asp-', parameters('appName'))]",
+        "sqlServerName": "[concat('sql-', uniqueString(resourceGroup().id, parameters('appName')))]",
+        "databaseName": "IntuneCD_DB",
+        "keyVaultName": "[concat('kv-', uniqueString(resourceGroup().id, parameters('appName')))]"
+    },
+    "resources": [
+        {
+            "type": "Microsoft.KeyVault/vaults",
+            "apiVersion": "2021-10-01",
+            "name": "[variables('keyVaultName')]",
+            "location": "[resourceGroup().location]",
+            "properties": {
+                "sku": {
+                    "family": "A",
+                    "name": "standard"
+                },
+                "tenantId": "[subscription().tenantId]",
+                "accessPolicies": [],
+                "enabledForDeployment": true,
+                "enabledForTemplateDeployment": true,
+                "enableRbacAuthorization": true
+            }
+        },
+        {
+            "type": "Microsoft.Sql/servers",
+            "apiVersion": "2021-11-01",
+            "name": "[variables('sqlServerName')]",
+            "location": "[parameters('dbLocation')]",
+            "properties": {
+                "administratorLogin": "[parameters('dbAdminLogin')]",
+                "administratorLoginPassword": "[parameters('dbAdminPassword')]"
+            },
+            "resources": [
+                {
+                    "type": "databases",
+                    "apiVersion": "2021-11-01",
+                    "name": "[variables('databaseName')]",
+                    "location": "[parameters('dbLocation')]",
+                    "sku": {
+                        "name": "[parameters('dbSku')]",
+                        "tier": "[parameters('dbSku')]"
+                    },
+                    "properties": {
+                        "collation": "SQL_Latin1_General_CP1_CI_AS",
+                        "maxSizeBytes": 2147483648
+                    },
+                    "dependsOn": [
+                        "[resourceId('Microsoft.Sql/servers', variables('sqlServerName'))]"
+                    ]
+                },
+                {
+                    "type": "firewallRules",
+                    "apiVersion": "2021-11-01",
+                    "name": "AllowAllWindowsAzureIps",
+                    "location": "[parameters('dbLocation')]",
+                    "properties": {
+                        "startIpAddress": "0.0.0.0",
+                        "endIpAddress": "0.0.0.0"
+                    },
+                    "dependsOn": [
+                        "[resourceId('Microsoft.Sql/servers', variables('sqlServerName'))]"
+                    ]
+                }
+            ]
+        },
+        {
+            "type": "Microsoft.Web/serverfarms",
+            "apiVersion": "2021-02-01",
+            "name": "[variables('appServicePlanName')]",
+            "location": "[resourceGroup().location]",
+            "sku": {
+                "name": "[parameters('sku')]",
+                "tier": "Basic"
+            },
+            "kind": "linux",
+            "properties": {
+                "reserved": true
+            }
+        },
+        {
+            "type": "Microsoft.Web/sites",
+            "apiVersion": "2021-02-01",
+            "name": "[parameters('appName')]",
+            "location": "[resourceGroup().location]",
+            "dependsOn": [
+                "[resourceId('Microsoft.Web/serverfarms', variables('appServicePlanName'))]",
+                "[resourceId('Microsoft.Sql/servers', variables('sqlServerName'))]",
+                "[resourceId('Microsoft.Sql/servers/databases', variables('sqlServerName'), variables('databaseName'))]"
+            ],
+            "kind": "app,linux,container",
+            "properties": {
+                "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', variables('appServicePlanName'))]",
+                "siteConfig": {
+                    "linuxFxVersion": "[concat('DOCKER|', parameters('dockerImage'))]",
+                    "appSettings": [
+                        {
+                            "name": "WEBSITES_ENABLE_APP_SERVICE_STORAGE",
+                            "value": "false"
+                        },
+                        {
+                            "name": "WEBSITES_PORT",
+                            "value": "8000"
+                        },
+                        {
+                            "name": "INTUNE_CLIENT_ID",
+                            "value": "[parameters('clientId')]"
+                        },
+                        {
+                            "name": "INTUNE_CLIENT_SECRET",
+                            "value": "[parameters('clientSecret')]"
+                        },
+                        {
+                            "name": "INTUNE_TENANT_ID",
+                            "value": "[parameters('tenantId')]"
+                        },
+                        {
+                            "name": "KEY_VAULT_NAME",
+                            "value": "[variables('keyVaultName')]"
+                        },
+                        {
+                            "name": "TZ",
+                            "value": "[parameters('timezone')]"
+                        },
+                        {
+                            "name": "SQL_CONN_STRING",
+                            "value": "[concat('Driver={ODBC Driver 18 for SQL Server};Server=tcp:', variables('sqlServerName'), '.database.windows.net,1433;Database=', variables('databaseName'), ';Uid=', parameters('dbAdminLogin'), ';Pwd=', parameters('dbAdminPassword'), ';Encrypt=yes;TrustServerCertificate=no;Connection Timeout=30;')]"
+                        }
+                    ]
+                }
+            }
+        }
+    ],
+    "outputs": {
+        "websiteUrl": {
+            "type": "string",
+            "value": "[concat('https://', reference(resourceId('Microsoft.Web/sites', parameters('appName'))).defaultHostName)]"
+        },
+        "sqlServerName": {
+            "type": "string",
+            "value": "[variables('sqlServerName')]"
+        }
+    }
+}

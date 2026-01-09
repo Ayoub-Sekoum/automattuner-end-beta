@@ -1,0 +1,5 @@
+{
+  "name": "AutoMatTuner Dashboard",
+  "description": "A modern, AI-enhanced frontend for the AutoMatTuner Intune automation script. Features real-time upload monitoring, log analysis, and an AI assistant for generating PowerShell detection scripts.",
+  "requestFramePermissions": []
+}
